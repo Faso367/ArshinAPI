@@ -1,0 +1,2 @@
+2024-07-04 16:53:10 ERROR Ошибка: int() argument must be a string, a bytes-like object or a real number, not 'list'
+2024-07-04 16:53:41 ERROR Ошибка: int() argument must be a string, a bytes-like object or a real number, not 'list'
