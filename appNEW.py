@@ -109,10 +109,13 @@ file_handler.setFormatter(formatter)
 # Добавление обработчиков к логгеру
 logger.addHandler(file_handler)
 
+impreciseSearchParams = ['year', 'rows', 'start', 'sort']
+preciseSearchParams = ['poveritelOrg', 'registerNumber', 'typeName', 'serialNumber', 'svidetelstvoNumber', 'poverkaDate', 'konecDate', 'isPrigodno']
 
 @app.route('/vri', methods=['GET'])
 def vri():
     '''Вызывается пользователем с заданными параметрами'''
+
     try:
         paramsDict = request.args.to_dict()
 
@@ -121,11 +124,15 @@ def vri():
             if key not in correctParams or to_int_if_possible(value) not in correctValues.get(key, to_int_if_possible(value))}
 
         # Валидируем значение параметра sort
-        if invalid_entries or 'sort' in paramsDict.keys() and paramsDict['sort'].split(' ')[-1] not in ['asc', 'desc']:
+        if len(invalid_entries) > 0 or ('sort' in paramsDict.keys() and paramsDict['sort'].split(' ')[-1] not in ['asc', 'desc']):
             return jsonify(Invalid_data=invalid_entries, Error="Были найдены некорректные параметры")
 
         elif len(set(paramsDict)) != len(paramsDict):
             return jsonify(Invalid_data=invalid_entries, Error="Некоторые параметры повторяются, используйте & для перечисления значений")
+
+        # Если задан параметр search и ещё один из четких параметров
+        elif len([key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams]) > 0:
+            return jsonify(Invalid_data=[key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams], Error="Нельзя использовать поиск по одному параметру и по всем одновременно")
 
         # Если всё ок
         else:
@@ -147,8 +154,9 @@ def vri():
             return jsonify(result)
             
     except Exception as e:
-        logger.error(f'Ошибка: {e}')
-        return jsonify(Error = 'Произошла непредвиденная ошибка')
+       logger.error(f'Ошибка: {e}')
+       print(e)
+       return jsonify(Error = 'Произошла непредвиденная ошибка')
 
 
 def SelectFromDb(**kwargs):
@@ -177,13 +185,17 @@ def SelectFromDb(**kwargs):
         key = item[0]
         valList = item[1]
         if key != 'start' and key != 'rows':
+            # Заменяем спецсимволы на те, что используются в postgresql 
             items[key] = replaceSymbols(valList)
         elif key != 'start' or key != 'rows':
             items[key] = valList
 
+    keysWithoutJoin = ['serialNumber', 'svidetelstvoNumber', 'poverkaDate', 'konecDate', 'isPrigodno']
+    keysWithJoin = ['poveritelOrg', 'registerNumber', 'typeName']
+
     # Пробегаемся по полученным параметрам
     for key, valueArr in items.items():
-        if hasattr(partitionTable, key):
+        if key in keysWithoutJoin:
             column = getattr(partitionTable, key)
             # Пробегаемся по значениям параметра
             for v in valueArr:
@@ -192,9 +204,11 @@ def SelectFromDb(**kwargs):
                 else:
                     ANDexpressions.append(column.ilike(f"{v}"))
 
+
         # Если используется неточный поиск по неопределенным параметрам
         elif key == 'search':
             for v in valueArr:
+                # Добавляем поиск только по параметрам, которые доступны для неточного поиска
                 ORexpressions.append(UniqueTypeNames.typeName.ilike(f"{v}"))
                 ORexpressions.append(UniquePoveritelOrgs.poveritelOrg.ilike(f"{v}"))
                 ORexpressions.append(UniqueRegisterNumbers.registerNumber.ilike(f"{v}"))
@@ -206,26 +220,35 @@ def SelectFromDb(**kwargs):
                 svidCol = getattr(partitionTable, 'svidetelstvoNumber')
                 ORexpressions.append(svidCol.ilike(f"{v}"))
 
-        elif key in ['typeName', 'poveritelOrg', 'registerNumber', 'rows', 'start', 'sort']: # ['mit_title', 'org_title', 'rows', 'start'] !!!!!!!!!!
+        elif key in keysWithJoin:
+            if 'typeName' in kwargs:
+                ANDexpressions.append(UniqueTypeNames.typeName == kwargs['typeName'])
+            elif 'poveritelOrg' in kwargs:
+                ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'])
+            elif 'registerNumber' in kwargs:
+                ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'])
+
+
+        elif key in ['rows', 'start', 'sort']: # ['mit_title', 'org_title', 'rows', 'start'] !!!!!!!!!!
             continue  # rows и start обработаны ранее, остальные будут обработаны в JOIN и FILTER
         else:
             raise AttributeError(f"Некорректный параметр: {key}")
 
     # Дополняем условия
-    if 'typeName' in kwargs:
-        ANDexpressions.append(UniqueTypeNames.typeName == kwargs['typeName'])
-    elif 'poveritelOrg' in kwargs:
-        ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'])
-    elif 'registerNumber' in kwargs:
-        ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'])
+    # if 'typeName' in kwargs:
+    #     ANDexpressions.append(UniqueTypeNames.typeName == kwargs['typeName'])
+    # elif 'poveritelOrg' in kwargs:
+    #     ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'])
+    # elif 'registerNumber' in kwargs:
+    #     ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'])
 
 
-    #for condition in ANDexpressions:
+    # for condition in ANDexpressions:
     #    print(condition.compile(compile_kwargs={"literal_binds": True}))
     
-    #print('-----------------------------------------------')
+    # print('-----------------------------------------------')
 
-    #for condition in ORexpressions:
+    # for condition in ORexpressions:
     #    print(condition.compile(compile_kwargs={"literal_binds": True}))
 
     # Составляем тело Where условия
