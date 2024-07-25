@@ -182,17 +182,19 @@ def SelectFromDb(**kwargs):
             items[key] = valList
 
     # Пробегаемся по полученным параметрам
-    for key, value in items.items():
+    for key, valueArr in items.items():
         if hasattr(partitionTable, key):
             column = getattr(partitionTable, key)
-            if '*' in value or ' ' in value:
-                ANDexpressions.append(column == value)
-            else:
-                ANDexpressions.append(column.ilike(f"{value}"))
+            # Пробегаемся по значениям параметра
+            for v in valueArr:
+                if '*' in v or ' ' in v:
+                    ANDexpressions.append(column == v)
+                else:
+                    ANDexpressions.append(column.ilike(f"{v}"))
 
         # Если используется неточный поиск по неопределенным параметрам
         elif key == 'search':
-            for v in value:
+            for v in valueArr:
                 ORexpressions.append(UniqueTypeNames.typeName.ilike(f"{v}"))
                 ORexpressions.append(UniquePoveritelOrgs.poveritelOrg.ilike(f"{v}"))
                 ORexpressions.append(UniqueRegisterNumbers.registerNumber.ilike(f"{v}"))
@@ -215,19 +217,31 @@ def SelectFromDb(**kwargs):
     elif 'poveritelOrg' in kwargs:
         ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'])
     elif 'registerNumber' in kwargs:
-        ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['poveritelOrg'])
+        ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'])
+
+
+    #for condition in ANDexpressions:
+    #    print(condition.compile(compile_kwargs={"literal_binds": True}))
     
+    #print('-----------------------------------------------')
+
+    #for condition in ORexpressions:
+    #    print(condition.compile(compile_kwargs={"literal_binds": True}))
+
     # Составляем тело Where условия
     combined_expression1 = and_(*ANDexpressions)
     combined_expression2 = or_(*ORexpressions)
     combined_expression = and_(combined_expression1, combined_expression2)
+
      
-    query = session.query(partitionTable, UniqueTypeNames, UniquePoveritelOrgs) \
+    query = session.query(partitionTable, UniqueTypeNames, UniquePoveritelOrgs, UniqueRegisterNumbers) \
         .join(UniqueTypeNames, partitionTable.typeNameId == UniqueTypeNames.id) \
         .join(UniquePoveritelOrgs, partitionTable.poveritelOrgId == UniquePoveritelOrgs.id) \
-        .join(UniquePoveritelOrgs, partitionTable.poveritelOrgId == UniquePoveritelOrgs.id) \
+        .join(UniqueRegisterNumbers, partitionTable.registerNumberId == UniqueRegisterNumbers.id) \
         .filter(combined_expression) 
-    
+    # print('-----------------------------------------------')
+    # print(str(query))
+
     # Добавляем сортировку, если такой параметр был задан
     if 'sort' in kwargs:
         col = getattr(partitionTable, kwargs['sort'][0])
@@ -238,6 +252,8 @@ def SelectFromDb(**kwargs):
 
     query = query.limit(items['rows'][0]) \
         .offset(items['start'][0])
+
+    #print(str(query))
 
     res = query.all()
     result = [queryToRow(query) for query in res]
