@@ -79,9 +79,6 @@ correctParams = ['vri_id', 'poveritelOrg', 'registerNumber', 'serialNumber', 'sv
                  'poverkaDate', 'konecDate', 'typeName', 'isPrigodno',
                  'year', 'sort', 'start', 'rows', 'search']
 
-
-
-
 correctValues = {'rows': range(1, 101), 'start': range(99999), 'isPrigodno': ['true', 'false'], 'year': range(2019, current_year + 1)}
 
 
@@ -116,47 +113,48 @@ preciseSearchParams = ['poveritelOrg', 'registerNumber', 'typeName', 'serialNumb
 def vri():
     '''Вызывается пользователем с заданными параметрами'''
 
-    try:
-        paramsDict = request.args.to_dict()
+    #try:
+    paramsDict = request.args.to_dict()
 
-        # Валидируем на допустимые параметры и числовые значения
-        invalid_entries = {key: value for key, value in paramsDict.items()
-            if key not in correctParams or to_int_if_possible(value) not in correctValues.get(key, to_int_if_possible(value))}
+    # Валидируем на допустимые параметры и числовые значения
+    invalid_entries = {key: value for key, value in paramsDict.items()
+        if key not in correctParams or to_int_if_possible(value) not in correctValues.get(key, to_int_if_possible(value))}
 
-        # Валидируем значение параметра sort
-        if len(invalid_entries) > 0 or ('sort' in paramsDict.keys() and paramsDict['sort'].split(' ')[-1] not in ['asc', 'desc']):
-            return jsonify(Invalid_data=invalid_entries, Error="Были найдены некорректные параметры")
+    # Валидируем значение параметра sort
+    if len(invalid_entries) > 0 or ('sort' in paramsDict.keys() and paramsDict['sort'].split(' ')[-1] not in ['asc', 'desc']):
+        return jsonify(Invalid_data=invalid_entries, Error="Были найдены некорректные параметры")
 
-        elif len(set(paramsDict)) != len(paramsDict):
-            return jsonify(Invalid_data=invalid_entries, Error="Некоторые параметры повторяются, используйте & для перечисления значений")
+    elif len(set(paramsDict)) != len(paramsDict):
+        return jsonify(Invalid_data=invalid_entries, Error="Некоторые параметры повторяются, используйте & для перечисления значений")
 
-        # Если задан параметр search и ещё один из четких параметров
-        elif len([key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams]) > 0:
-            return jsonify(Invalid_data=[key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams], Error="Нельзя использовать поиск по одному параметру и по всем одновременно")
+    # Если задан параметр search и ещё один из четких параметров
+    elif len([key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams]) > 1:
+        return jsonify(Invalid_data=[key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams], Error="Нельзя использовать поиск по одному параметру и по всем одновременно")
 
-        # Если всё ок
-        else:
-            newparamsDict = dict()
-            defaultValues = {'year': current_year, 'rows': [10], 'start': [0]}
+    # Если всё ок
+    else:
+        newparamsDict = dict()
+        defaultValues = {'year': current_year, 'rows': [10], 'start': [0]}
 
-            # Добавляем дефолтные пары ключ-значение, если их значения не заданы 
-            for key, value in defaultValues.items():       
-                if key not in paramsDict:
-                    newparamsDict[key] = value
+        # Добавляем дефолтные пары ключ-значение, если их значения не заданы 
+        for key, value in defaultValues.items():       
+            if key not in paramsDict:
+                newparamsDict[key] = value
 
-            # Вытаскиваем данные из списков-значений словаря
-            for key, value in paramsDict.items():
-                values = value.split(' ')
-                newparamsDict[key] = [to_int_if_possible(val) for val in values]
+        # Вытаскиваем данные из списков-значений словаря !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        for key, value in paramsDict.items():
+            #values = value.split(' ')
+            newparamsDict[key] = [to_int_if_possible(value)]
 
-            # Запрос к БД
-            result = SelectFromDb(**newparamsDict)
-            return jsonify(result)
-            
-    except Exception as e:
-       logger.error(f'Ошибка: {e}')
-       print(e)
-       return jsonify(Error = 'Произошла непредвиденная ошибка')
+        # Запрос к БД
+        print(newparamsDict)
+        result = SelectFromDb(**newparamsDict)
+        return jsonify(result)
+        
+    # except Exception as e:
+    #    logger.error(f'Ошибка: {e}')
+    #    print(e)
+    #    return jsonify(Error = 'Произошла непредвиденная ошибка')
 
 
 def SelectFromDb(**kwargs):
@@ -183,16 +181,22 @@ def SelectFromDb(**kwargs):
     # Итерируем список кортежей
     for item in kwargs.items():
         key = item[0]
+        print(key)
         valList = item[1]
+        print(valList)
         if key != 'start' and key != 'rows':
             # Заменяем спецсимволы на те, что используются в postgresql 
             items[key] = replaceSymbols(valList)
         elif key != 'start' or key != 'rows':
             items[key] = valList
-
+    print('---------------------------')
     keysWithoutJoin = ['serialNumber', 'svidetelstvoNumber', 'poverkaDate', 'konecDate', 'isPrigodno']
     keysWithJoin = ['poveritelOrg', 'registerNumber', 'typeName']
 
+
+    query = session.query(partitionTable)
+
+    print(str(query))
     # Пробегаемся по полученным параметрам
     for key, valueArr in items.items():
         if key in keysWithoutJoin:
@@ -219,14 +223,46 @@ def SelectFromDb(**kwargs):
                 ORexpressions.append(serCol.ilike(f"{v}"))
                 svidCol = getattr(partitionTable, 'svidetelstvoNumber')
                 ORexpressions.append(svidCol.ilike(f"{v}"))
+                query = session.query(partitionTable, UniqueTypeNames, UniquePoveritelOrgs, UniqueRegisterNumbers) \
+                .join(UniqueTypeNames, partitionTable.typeNameId == UniqueTypeNames.id) \
+                .join(UniquePoveritelOrgs, partitionTable.poveritelOrgId == UniquePoveritelOrgs.id) \
+                .join(UniqueRegisterNumbers, partitionTable.registerNumberId == UniqueRegisterNumbers.id)
 
         elif key in keysWithJoin:
-            if 'typeName' in kwargs:
+            joinConditions = {}
+            if key == 'typeName':
                 ANDexpressions.append(UniqueTypeNames.typeName == kwargs['typeName'])
-            elif 'poveritelOrg' in kwargs:
-                ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'])
-            elif 'registerNumber' in kwargs:
-                ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'])
+                query = query.add_entity(UniqueTypeNames)
+                joinConditions['UniqueTypeNames'] = 'typeNameId'
+                print(1)
+                #joinConditions.append('UniqueTypeNames')
+            elif key == 'poveritelOrg':
+                ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'][0])
+                print(kwargs['poveritelOrg'][0])
+                query = query.add_entity(UniquePoveritelOrgs)
+                joinConditions['UniquePoveritelOrgs'] = 'poveritelOrgId'
+                print(str(query))
+                print('-----------------------------')
+                #joinConditions.append('UniquePoveritelOrgs')
+            elif key == 'registerNumber':
+                ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'][0])
+                print(str(ANDexpressions[0]))
+                #query = query.add_column(UniqueRegisterNumbers.registerNumber)
+                query = query.add_entity(UniqueRegisterNumbers)
+                print(str(query))
+                joinConditions['UniqueRegisterNumbers'] = 'registerNumberId'
+                #joinConditions.append('UniqueRegisterNumbers')
+
+            for k, v in joinConditions.items():
+                partitionTableCol = getattr(partitionTable, v)
+                uniqueTable = globals()[k]
+                uniqueTableCol = uniqueTable.id
+                query = query.join(uniqueTable, partitionTableCol == uniqueTableCol)
+                print(str(query))
+                print('-----------------------------------') 
+            # for cond in joinConditions:
+            #     query = query.join(globals()[cond], )
+
 
 
         elif key in ['rows', 'start', 'sort']: # ['mit_title', 'org_title', 'rows', 'start'] !!!!!!!!!!
@@ -234,36 +270,25 @@ def SelectFromDb(**kwargs):
         else:
             raise AttributeError(f"Некорректный параметр: {key}")
 
-    # Дополняем условия
-    # if 'typeName' in kwargs:
-    #     ANDexpressions.append(UniqueTypeNames.typeName == kwargs['typeName'])
-    # elif 'poveritelOrg' in kwargs:
-    #     ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'])
-    # elif 'registerNumber' in kwargs:
-    #     ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'])
 
 
-    # for condition in ANDexpressions:
-    #    print(condition.compile(compile_kwargs={"literal_binds": True}))
-    
-    # print('-----------------------------------------------')
-
-    # for condition in ORexpressions:
-    #    print(condition.compile(compile_kwargs={"literal_binds": True}))
 
     # Составляем тело Where условия
     combined_expression1 = and_(*ANDexpressions)
     combined_expression2 = or_(*ORexpressions)
     combined_expression = and_(combined_expression1, combined_expression2)
 
-     
-    query = session.query(partitionTable, UniqueTypeNames, UniquePoveritelOrgs, UniqueRegisterNumbers) \
-        .join(UniqueTypeNames, partitionTable.typeNameId == UniqueTypeNames.id) \
-        .join(UniquePoveritelOrgs, partitionTable.poveritelOrgId == UniquePoveritelOrgs.id) \
-        .join(UniqueRegisterNumbers, partitionTable.registerNumberId == UniqueRegisterNumbers.id) \
-        .filter(combined_expression) 
+    # query = session.query(partitionTable, UniqueTypeNames, UniquePoveritelOrgs, UniqueRegisterNumbers) \
+    #     .join(UniqueTypeNames, partitionTable.typeNameId == UniqueTypeNames.id) \
+    #     .join(UniquePoveritelOrgs, partitionTable.poveritelOrgId == UniquePoveritelOrgs.id) \
+    #     .join(UniqueRegisterNumbers, partitionTable.registerNumberId == UniqueRegisterNumbers.id) \
+    #     .filter(combined_expression) 
+
+    query = query.filter(combined_expression)
+    
+
     # print('-----------------------------------------------')
-    # print(str(query))
+    #print(str(query))
 
     # Добавляем сортировку, если такой параметр был задан
     if 'sort' in kwargs:
@@ -276,7 +301,7 @@ def SelectFromDb(**kwargs):
     query = query.limit(items['rows'][0]) \
         .offset(items['start'][0])
 
-    #print(str(query))
+    print(str(query))
 
     res = query.all()
     result = [queryToRow(query) for query in res]
