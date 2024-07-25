@@ -1,13 +1,22 @@
-from flask import Flask, request, jsonify
+#from flask import Flask, request, jsonify
 from datetime import datetime
 from sqlalchemy import Column, Integer, BigInteger, VARCHAR, Boolean, SmallInteger, Date, create_engine, and_, or_,desc
 from sqlalchemy.schema import ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, class_mapper
 import logging, os
 
+
+from flask import Flask, request, jsonify, make_response, render_template, session, flash
+import jwt
+from datetime import datetime, timedelta
+from functools import wraps
+
 current_year =  datetime.now().year
 
+#app = Flask(__name__)
+
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'KEEP_IT_A_SECRET'
 
 #app.config['DEBUG'] = True
 #app.config['ENV'] = 'development'
@@ -106,55 +115,90 @@ file_handler.setFormatter(formatter)
 # Добавление обработчиков к логгеру
 logger.addHandler(file_handler)
 
+def token_required(func):
+    @wraps(func)
+    def decorated(*args, **kwargs):
+        token = request.args.get('token')
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 401
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'])
+        except:
+            return jsonify({'message': 'Invalid token'}), 403
+
+        return func(*args, **kwargs)
+
+    return decorated
+
+
+@app.route('/login', methods=['GET','POST'])
+def login():
+    #if request.method == "GET":
+    #    return render_template("login.html")
+    
+    if request.form['username'] and request.form['password'] == '123456':  # в данном случае пароль это хэш номера физического ключа
+        session['logged_in'] = True
+        token = jwt.encode({
+            'user': request.form['username'],
+            'expiration': str(datetime.utcnow() + timedelta(minutes=50))
+        }, app.config['SECRET_KEY'])
+
+        return jsonify({'token': token})
+    else:
+        return make_response('Unable to verify', 403, {'WWW-Authenticate': 'Basic realm: "Authentication Failed"'})
+
+
 impreciseSearchParams = ['year', 'rows', 'start', 'sort']
 preciseSearchParams = ['poveritelOrg', 'registerNumber', 'typeName', 'serialNumber', 'svidetelstvoNumber', 'poverkaDate', 'konecDate', 'isPrigodno']
 
 @app.route('/vri', methods=['GET'])
+@token_required
 def vri():
     '''Вызывается пользователем с заданными параметрами'''
 
-    #try:
-    paramsDict = request.args.to_dict()
+    try:
+        paramsDict = request.args.to_dict()
 
-    # Валидируем на допустимые параметры и числовые значения
-    invalid_entries = {key: value for key, value in paramsDict.items()
-        if key not in correctParams or to_int_if_possible(value) not in correctValues.get(key, to_int_if_possible(value))}
+        # Валидируем на допустимые параметры и числовые значения
+        invalid_entries = {key: value for key, value in paramsDict.items()
+            if key not in correctParams or to_int_if_possible(value) not in correctValues.get(key, to_int_if_possible(value))}
 
-    # Валидируем значение параметра sort
-    if len(invalid_entries) > 0 or ('sort' in paramsDict.keys() and paramsDict['sort'].split(' ')[-1] not in ['asc', 'desc']):
-        return jsonify(Invalid_data=invalid_entries, Error="Были найдены некорректные параметры")
+        # Валидируем значение параметра sort
+        if len(invalid_entries) > 0 or ('sort' in paramsDict.keys() and paramsDict['sort'].split(' ')[-1] not in ['asc', 'desc']):
+            return jsonify(Invalid_data=invalid_entries, Error="Были найдены некорректные параметры")
 
-    elif len(set(paramsDict)) != len(paramsDict):
-        return jsonify(Invalid_data=invalid_entries, Error="Некоторые параметры повторяются, используйте & для перечисления значений")
+        elif len(set(paramsDict)) != len(paramsDict):
+            return jsonify(Invalid_data=invalid_entries, Error="Некоторые параметры повторяются, используйте & для перечисления значений")
 
-    # Если задан параметр search и ещё один из четких параметров
-    elif len([key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams]) > 1:
-        return jsonify(Invalid_data=[key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams], Error="Нельзя использовать поиск по одному параметру и по всем одновременно")
+        # Если задан параметр search и ещё один из четких параметров
+        elif len([key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams]) > 1:
+            return jsonify(Invalid_data=[key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams], Error="Нельзя использовать поиск по одному параметру и по всем одновременно")
 
-    # Если всё ок
-    else:
-        newparamsDict = dict()
-        defaultValues = {'year': current_year, 'rows': [10], 'start': [0]}
+        # Если всё ок
+        else:
+            newparamsDict = dict()
+            defaultValues = {'year': current_year, 'rows': [10], 'start': [0]}
 
-        # Добавляем дефолтные пары ключ-значение, если их значения не заданы 
-        for key, value in defaultValues.items():       
-            if key not in paramsDict:
-                newparamsDict[key] = value
+            # Добавляем дефолтные пары ключ-значение, если их значения не заданы 
+            for key, value in defaultValues.items():       
+                if key not in paramsDict:
+                    newparamsDict[key] = value
 
-        # Вытаскиваем данные из списков-значений словаря !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        for key, value in paramsDict.items():
-            #values = value.split(' ')
-            newparamsDict[key] = [to_int_if_possible(value)]
+            # Вытаскиваем данные из списков-значений словаря !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            for key, value in paramsDict.items():
+                #values = value.split(' ')
+                newparamsDict[key] = [to_int_if_possible(value)]
 
-        # Запрос к БД
-        print(newparamsDict)
-        result = SelectFromDb(**newparamsDict)
-        return jsonify(result)
+            # Запрос к БД
+            #print(newparamsDict)
+            result = SelectFromDb(**newparamsDict)
+            return jsonify(result)
         
-    # except Exception as e:
-    #    logger.error(f'Ошибка: {e}')
-    #    print(e)
-    #    return jsonify(Error = 'Произошла непредвиденная ошибка')
+    except Exception as e:
+       logger.error(f'Ошибка: {e}')
+       print(e)
+       return jsonify(Error = 'Произошла непредвиденная ошибка')
 
 
 def SelectFromDb(**kwargs):
@@ -181,22 +225,22 @@ def SelectFromDb(**kwargs):
     # Итерируем список кортежей
     for item in kwargs.items():
         key = item[0]
-        print(key)
+        #print(key)
         valList = item[1]
-        print(valList)
+        #print(valList)
         if key != 'start' and key != 'rows':
             # Заменяем спецсимволы на те, что используются в postgresql 
             items[key] = replaceSymbols(valList)
         elif key != 'start' or key != 'rows':
             items[key] = valList
-    print('---------------------------')
+    #print('---------------------------')
     keysWithoutJoin = ['serialNumber', 'svidetelstvoNumber', 'poverkaDate', 'konecDate', 'isPrigodno']
     keysWithJoin = ['poveritelOrg', 'registerNumber', 'typeName']
 
 
     query = session.query(partitionTable)
 
-    print(str(query))
+    #print(str(query))
     # Пробегаемся по полученным параметрам
     for key, valueArr in items.items():
         if key in keysWithoutJoin:
@@ -234,22 +278,22 @@ def SelectFromDb(**kwargs):
                 ANDexpressions.append(UniqueTypeNames.typeName == kwargs['typeName'])
                 query = query.add_entity(UniqueTypeNames)
                 joinConditions['UniqueTypeNames'] = 'typeNameId'
-                print(1)
+                #print(1)
                 #joinConditions.append('UniqueTypeNames')
             elif key == 'poveritelOrg':
                 ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'][0])
-                print(kwargs['poveritelOrg'][0])
+                #print(kwargs['poveritelOrg'][0])
                 query = query.add_entity(UniquePoveritelOrgs)
                 joinConditions['UniquePoveritelOrgs'] = 'poveritelOrgId'
-                print(str(query))
-                print('-----------------------------')
+                #print(str(query))
+                #print('-----------------------------')
                 #joinConditions.append('UniquePoveritelOrgs')
             elif key == 'registerNumber':
                 ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'][0])
-                print(str(ANDexpressions[0]))
+                #print(str(ANDexpressions[0]))
                 #query = query.add_column(UniqueRegisterNumbers.registerNumber)
                 query = query.add_entity(UniqueRegisterNumbers)
-                print(str(query))
+                #print(str(query))
                 joinConditions['UniqueRegisterNumbers'] = 'registerNumberId'
                 #joinConditions.append('UniqueRegisterNumbers')
 
@@ -258,19 +302,15 @@ def SelectFromDb(**kwargs):
                 uniqueTable = globals()[k]
                 uniqueTableCol = uniqueTable.id
                 query = query.join(uniqueTable, partitionTableCol == uniqueTableCol)
-                print(str(query))
-                print('-----------------------------------') 
+                #print(str(query))
+                #print('-----------------------------------') 
             # for cond in joinConditions:
             #     query = query.join(globals()[cond], )
-
-
 
         elif key in ['rows', 'start', 'sort']: # ['mit_title', 'org_title', 'rows', 'start'] !!!!!!!!!!
             continue  # rows и start обработаны ранее, остальные будут обработаны в JOIN и FILTER
         else:
             raise AttributeError(f"Некорректный параметр: {key}")
-
-
 
 
     # Составляем тело Where условия
@@ -301,7 +341,7 @@ def SelectFromDb(**kwargs):
     query = query.limit(items['rows'][0]) \
         .offset(items['start'][0])
 
-    print(str(query))
+    #print(str(query))
 
     res = query.all()
     result = [queryToRow(query) for query in res]
