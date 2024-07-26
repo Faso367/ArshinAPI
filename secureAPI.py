@@ -200,10 +200,10 @@ def try_to_int(val):
 class ParamsSchema(Schema):
     sort = fields.Str()
     vri_id = fields.Int()
-    year = fields.Int(validate=validate.Range(min = 2019, max = current_year, error = ValidationError(f'Параметр year может принимать значения от 2019 до {current_year}')))
-    rows = fields.Int(validate=validate.Range(min = 1, max = 100, error = ValidationError('Параметр rows может принимать значения от 1 до 100')))
-    start = fields.Int(validate=validate.Range(min = 0, max = 99999, error = ValidationError('Параметр rows может принимать значения от 0 до 99999')))
-    isPrigodno = fields.Str(validate=validate.OneOf(choices=['true', 'false'], error = ValidationError('Параметр isPrigodno может принимать значение true или false')))
+    year = fields.Int(validate=validate.Range(min = 2019, max = current_year, error = f'Параметр year может принимать значения от 2019 до {current_year}'))
+    rows = fields.Int(validate=validate.Range(min = 1, max = 100, error = 'Параметр rows может принимать значения от 1 до 100'))
+    start = fields.Int(validate=validate.Range(min = 0, max = 99999, error = 'Параметр rows может принимать значения от 0 до 99999'))
+    isPrigodno = fields.Str(validate=validate.OneOf(choices=['true', 'false'], error = 'Параметр isPrigodno может принимать значение true или false'))
     svidetelstvoNumber = fields.Str()
     registerNumber = fields.Str()
     serialNumber = fields.Str()
@@ -281,7 +281,6 @@ def vri():
                 newparamsDict[key] = [to_int_if_possible(value)]
 
             # Запрос к БД
-            print(newparamsDict)
             result = SelectFromDb(**newparamsDict)
             return jsonify(result)
         
@@ -328,7 +327,7 @@ def SelectFromDb(**kwargs):
 
     keysWithoutJoin = ['serialNumber', 'svidetelstvoNumber', 'poverkaDate', 'konecDate', 'isPrigodno']
     keysWithJoin = ['poveritelOrg', 'registerNumber', 'typeName']
-    query = session.query(partitionTable)
+    #query = session.query(partitionTable)
 
     # Пробегаемся по полученным параметрам
     for key, valueArr in items.items():
@@ -349,40 +348,21 @@ def SelectFromDb(**kwargs):
                 ORexpressions.append(UniqueTypeNames.typeName.ilike(f"{v}"))
                 ORexpressions.append(UniquePoveritelOrgs.poveritelOrg.ilike(f"{v}"))
                 ORexpressions.append(UniqueRegisterNumbers.registerNumber.ilike(f"{v}"))
-                #regCol = getattr(partitionTable, 'registerNumber')
-                #ORexpressions.append(regCol.ilike(f"{v}"))
-                # Доступ к колонкам через getattr
                 serCol = getattr(partitionTable, 'serialNumber')
                 ORexpressions.append(serCol.ilike(f"{v}"))
                 svidCol = getattr(partitionTable, 'svidetelstvoNumber')
                 ORexpressions.append(svidCol.ilike(f"{v}"))
-                query = session.query(partitionTable, UniqueTypeNames, UniquePoveritelOrgs, UniqueRegisterNumbers) \
-                .join(UniqueTypeNames, partitionTable.typeNameId == UniqueTypeNames.id) \
-                .join(UniquePoveritelOrgs, partitionTable.poveritelOrgId == UniquePoveritelOrgs.id) \
-                .join(UniqueRegisterNumbers, partitionTable.registerNumberId == UniqueRegisterNumbers.id)
+
 
         elif key in keysWithJoin:
-            joinConditions = {}
             if key == 'typeName':
-                ANDexpressions.append(UniqueTypeNames.typeName == kwargs['typeName'])
-                #query = query.add_entity(UniqueTypeNames)
-                joinConditions['UniqueTypeNames'] = 'typeNameId'
+                ANDexpressions.append(UniqueTypeNames.typeName == kwargs['typeName'][0])
 
             elif key == 'poveritelOrg':
                 ANDexpressions.append(UniquePoveritelOrgs.poveritelOrg == kwargs['poveritelOrg'][0])
-                #query = query.add_entity(UniquePoveritelOrgs)
-                joinConditions['UniquePoveritelOrgs'] = 'poveritelOrgId'
 
             elif key == 'registerNumber':
                 ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'][0])
-                #query = query.add_entity(UniqueRegisterNumbers)
-                joinConditions['UniqueRegisterNumbers'] = 'registerNumberId'
-
-            for k, v in joinConditions.items():
-                partitionTableCol = getattr(partitionTable, v)
-                uniqueTable = globals()[k]
-                uniqueTableCol = uniqueTable.id
-                query = query.join(uniqueTable, partitionTableCol == uniqueTableCol)
 
         elif key in ['rows', 'start', 'sort']: # ['mit_title', 'org_title', 'rows', 'start'] !!!!!!!!!!
             continue  # rows и start обработаны ранее, остальные будут обработаны в JOIN и FILTER
