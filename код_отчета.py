@@ -217,11 +217,11 @@ def vri():
             
     # Обрабатываем исключения
     except ValidationError as err:
-        logger.error(f'Ошибка: {e}')
+        logger.error(f'Ошибка: {str(err.messages)}')
         return jsonify({"Ошибки": err.messages}), 400
 
     except Exception as e:
-       logger.error(f'Ошибка: {e}')
+       logger.error(f'Ошибка: {str(e)}')
        return jsonify(Error = 'Произошла непредвиденная ошибка'), 400
     
 
