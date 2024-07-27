@@ -7,15 +7,18 @@ from marshmallow import Schema, fields, validates, ValidationError, validate
 from flask import Flask, request, jsonify, make_response, session
 from datetime import datetime, timedelta
 from functools import wraps
+from dotenv import load_dotenv
+
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(dotenv_path):
+    load_dotenv(dotenv_path)
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'KEEP_IT_A_SECRET'
-app.config['CLIENT_KEY'] = '123'
-app.config['DB_PASSWORD'] = 'password'
-app.config['DB_USERNAME'] = 'postgres'
 
-# Включаем принудительное использование HTTPS
-#app.config['SESSION_COOKIE_SECURE'] = True
+SECRET_KEY = os.getenv("SECRET_KEY")
+CLIENT_KEY = os.getenv("CLIENT_KEY")
+DB_USERNAME = os.getenv("DB_USERNAME")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 # Настройка политики CSP
 csp = {
@@ -23,15 +26,14 @@ csp = {
     'script-src': "'none'",   # Запрещает выполнение JavaScript кода
     'style-src': "'none'",    # Запрещает загрузку стилей
     'img-src': "'none'",      # Запрещает загрузку изображений
-    'font-src': "'self'",     # Разрешает шрифты только с текущего домена
+    'font-src': "'self'"     # Разрешает шрифты только с текущего домена
 }
 
 # Применяем политики CSP и конфигурируем параметры HTTP 
 talisman = Talisman(app)
 
 # Подключаемся к базе данных
-engine = create_engine(f'postgresql://{app.config['DB_USERNAME']}:{app.config['DB_PASSWORD']}@localhost:5432/Arshindb')
-#engine = create_engine('postgresql://postgres:password@localhost:5432/Arshindb')
+engine = create_engine(f'postgresql://{DB_USERNAME}:{DB_PASSWORD}@localhost:5432/Arshindb')
 # Организуем канал для передачи запросов
 Session = sessionmaker(bind=engine)
 session = Session()
@@ -56,7 +58,7 @@ class EquipmentInfo(Base):
 
 # Настройка логгера
 logger = logging.getLogger('arshinAPIlogger')
-# Устанавливаем уровень логирования на DEBUG
+# Устанавливаем уровень логирования
 logger.setLevel(logging.ERROR)
 
 # Определение пути к файлу логирования
@@ -74,6 +76,7 @@ file_handler.setFormatter(formatter)
 # Добавление обработчиков к логгеру
 logger.addHandler(file_handler)
 
+
 def token_required(func):
     '''Проводит аутентификацию на основе JWT токена'''
     @wraps(func)
@@ -85,7 +88,7 @@ def token_required(func):
             return jsonify({'message': 'Токен был утерян или время его существования закончилось'}), 401
         try:
             # Декодируем токен
-            data = jwt.decode(token.split(" ")[1], app.config['SECRET_KEY'], algorithms=["HS256"])
+            data = jwt.decode(token.split(" ")[1], SECRET_KEY, algorithms=["HS256"])
         except Exception as e:
             logger.error(f'Ошибка: {e}')
             return jsonify({'message': 'Неверный токен', 'error': str(e)}), 403
@@ -99,33 +102,12 @@ def login():
     '''Отвечает за получение пользователем JWT токена по его ключу'''
     auth = request.form
     # Если передан параметр key и он принадлежит конкретному пользователю
-    if auth.get('key') == app.config['CLIENT_KEY']:
-        # Генерируем токен
-        token = jwt.encode({'user': auth.get('username'), 'exp': datetime.utcnow() + timedelta(minutes=50)}, app.config['SECRET_KEY'], algorithm='HS256')
+    if auth.get('key') == CLIENT_KEY:
+        # Генерируем токен, который будет существовать 1 день
+        token = jwt.encode({'user': auth.get('username'), 'exp': datetime.utcnow() + timedelta(days=1)}, SECRET_KEY, algorithm='HS256')
         # Возвращаем пользователю токен
         return jsonify({'token': token})
     return make_response('Ваш ключ недействителен', 403, {'WWW-Authenticate': 'Basic realm="Login required!"'})
-
-
-@app.errorhandler(400)
-def bad_request(error):
-    return jsonify({'error': 'Bad request'}), 400
-
-@app.errorhandler(401)
-def unauthorized(error):
-    return jsonify({'error': 'Unauthorized'}), 401
-
-@app.errorhandler(403)
-def forbidden(error):
-    return jsonify({'error': 'Forbidden'}), 403
-
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({'error': 'Not found'}), 404
-
-@app.errorhandler(500)
-def server_error(error):
-    return jsonify({'error': 'Internal server error'}), 500
 
 
 correctParams = ['vri_id', 'poveritelOrg', 'registerNumber', 'serialNumber', 'svidetelstvoNumber',
@@ -192,8 +174,8 @@ def validation(paramsAndValues):
         raise ValidationError(dict=invalidParams, message="Некоторые параметры повторяются, используйте & для перечисления значений")
 
     # Если задан параметр search и ещё один из четких параметров
-    elif len([key for key in params if key == 'search' or key in preciseSearchParams]) > 1:
-        raise ValidationError(list=[key for key in params if key == 'search' or key in preciseSearchParams], message="Нельзя использовать поиск по одному параметру и по всем одновременно")
+    elif len([key for key in params if key == 'search']) != 0 and len([key for key in params if key in preciseSearchParams]) != 0:
+        raise ValidationError(message="Нельзя использовать поиск по одному параметру и по всем одновременно")
     
     # В остальных случаях валидация пройдена
     else:
@@ -232,7 +214,7 @@ def vri():
             # Запрашиваем данные из базы
             result = SelectFromDb(**newparamsDict)
             return jsonify(result)
-        
+            
     # Обрабатываем исключения
     except ValidationError as err:
         logger.error(f'Ошибка: {e}')
@@ -264,7 +246,7 @@ def SelectFromDb(**kwargs):
 
     # Итерируем полуенные параметры
     for key, valueArr in items.items():
-        column = getattr(EquipmentInfo, key)
+
         # Если есть параметр search, значит используется полнотекстовый поиск
         # по списку параметров
         if key == 'search':
@@ -276,6 +258,7 @@ def SelectFromDb(**kwargs):
                 i += 1
 
         elif key in preciseSearchParams:
+            column = getattr(EquipmentInfo, key)
             # Итерируем значения параметра
             for v in valueArr:
                 # Дополняем условие И
@@ -312,22 +295,14 @@ def SelectFromDb(**kwargs):
 
     # Получаем результат запроса
     res = query.all()
+
     # Преобразуем данные в удобочитаемый формат
-    result = [queryToRow(query) for query in res]
-    return result
-
-
-def queryToRow(query):
-    '''Преобразует полученный объект в словарь'''
-    result = {}
-    # Объект может содержать несколько строк, пробегаемся по ним
-    for item in query:
-        result.update(to_dict(item))
+    result = [to_dict(query) for query in res]
     return result
 
 
 def to_dict(instance):
-    '''Преобразует строку таблицы в словарь'''
+    '''Преобразует объект таблицы в словарь'''
     if not instance:
         return {}
     # Получаем типы по их названию
