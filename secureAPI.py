@@ -5,21 +5,32 @@ from sqlalchemy.schema import ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, class_mapper
 import logging, os
 from flask_talisman import Talisman
-from marshmallow import Schema, fields, validates, ValidationError, validate, error_store
-from flask import Flask, request, jsonify, make_response, render_template, session, flash
+from marshmallow import Schema, fields, validates, ValidationError, validate
+from flask import Flask, request, jsonify, make_response, session
 import jwt
 from datetime import datetime, timedelta
 from functools import wraps
 import bleach
-import psycopg2
+import os
+from dotenv import load_dotenv
 
 current_year =  datetime.now().year
 
-#app = Flask(__name__)
+
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(dotenv_path):
+    load_dotenv(dotenv_path)
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'KEEP_IT_A_SECRET'
-app.config['CLIENT_KEY'] = '123'
+# app.config['SECRET_KEY'] = 'KEEP_IT_A_SECRET'
+# app.config['CLIENT_KEY'] = '123'
+
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+CLIENT_KEY = os.getenv("CLIENT_KEY")
+DB_USERNAME = os.getenv("DB_USERNAME")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+
 
 # Включаем принудительное использование HTTPS
 #app.config['SESSION_COOKIE_SECURE'] = True
@@ -39,9 +50,8 @@ csp = {
 
 talisman = Talisman(app)
 
-#app.config['DEBUG'] = True
 #app.config['ENV'] = 'development'
-engine = create_engine('postgresql://postgres:password@localhost:5432/Arshindb')
+engine = create_engine(f'postgresql://{DB_USERNAME}:{DB_PASSWORD}@localhost:5432/Arshindb')
 Session = sessionmaker(bind=engine)
 session = Session()
 
@@ -126,29 +136,36 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 def token_required(func):
+    '''Проводит аутентификацию на основе JWT токена'''
     @wraps(func)
     def decorated(*args, **kwargs):
+        # Получаем токен из HTTP заголовка
         token = request.headers.get('Authorization')
+        # Если токен не найден
         if not token:
-            return jsonify({'message': 'Token is missing!'}), 401
-
+            return jsonify({'message': 'Токен был утерян или время его существования закончилось'}), 401
         try:
-            data = jwt.decode(token.split(" ")[1], app.config['SECRET_KEY'], algorithms=["HS256"])
+            # Декодируем токен
+            data = jwt.decode(token.split(" ")[1], SECRET_KEY, algorithms=["HS256"])
         except Exception as e:
-            return jsonify({'message': 'Invalid token', 'error': str(e)}), 403
+            logger.error(f'Ошибка: {e}')
+            return jsonify({'message': 'Неверный токен', 'error': str(e)}), 403
 
         return func(*args, **kwargs)
-
     return decorated
+
 
 @app.route('/login', methods=['POST'])
 def login():
+    '''Отвечает за получение пользователем JWT токена по его ключу'''
     auth = request.form
-    if auth.get('key') == app.config['CLIENT_KEY']:
-        token = jwt.encode({'user': auth.get('username'), 'exp': datetime.utcnow() + timedelta(minutes=50)}, app.config['SECRET_KEY'], algorithm='HS256')
+    # Если передан параметр key и он принадлежит конкретному пользователю
+    if auth.get('key') == CLIENT_KEY:
+        # Генерируем токен, он существует 1 день
+        token = jwt.encode({'user': auth.get('username'), 'exp': datetime.utcnow() + timedelta(days=1)}, SECRET_KEY, algorithm='HS256')
+        # Возвращаем пользователю токен
         return jsonify({'token': token})
-    return make_response('Unable to verify', 403, {'WWW-Authenticate': 'Basic realm="Login required!"'})
-
+    return make_response('Ваш ключ недействителен', 403, {'WWW-Authenticate': 'Basic realm="Аутентификация прошла успешно"'})
 
 # @app.route('/hello', methods=['GET'])
 # @token_required
@@ -184,25 +201,12 @@ correctParams = ['vri_id', 'poveritelOrg', 'registerNumber', 'serialNumber', 'sv
                  'year', 'sort', 'start', 'rows', 'search']
 
 
-def to_int_if_possible(s):
-    if s.isdigit():
-        return int(s)
-    return s
-
-def try_to_int(val):
-    try:
-        return int(val)
-    except ValueError:
-        logger.error('Не удалось конвертировать строку в целое число')
-        return -1
-        #return "Введите целое число"
-
 class ParamsSchema(Schema):
     sort = fields.Str()
     vri_id = fields.Int()
     year = fields.Int(validate=validate.Range(min = 2019, max = current_year, error = f'Параметр year может принимать значения от 2019 до {current_year}'))
     rows = fields.Int(validate=validate.Range(min = 1, max = 100, error = 'Параметр rows может принимать значения от 1 до 100'))
-    start = fields.Int(validate=validate.Range(min = 0, max = 99999, error = 'Параметр rows может принимать значения от 0 до 99999'))
+    start = fields.Int(validate=validate.Range(min = 0, max = 99999, error = 'Параметр start может принимать значения от 0 до 99999'))
     isPrigodno = fields.Str(validate=validate.OneOf(choices=['true', 'false'], error = 'Параметр isPrigodno может принимать значение true или false'))
     svidetelstvoNumber = fields.Str()
     registerNumber = fields.Str()
@@ -214,30 +218,36 @@ class ParamsSchema(Schema):
 
     @validates('sort')
     def validate_sort(self, value):
+        '''Читает значения для сортировки данных'''
+        # Получаем значения до и после знаков-разделителей
         value = value.replace('%20', ' ').replace('+', ' ')
         parts = value.split(' ')
-
+        # Генерируем ошибку если введено более двух слов
         if len(parts) != 2:
-            raise ValidationError("Invalid format for sort parameter.")
+            raise ValidationError("Параметр sort при нимает 2 значения разделённых символами %20 или +")   
         else:
+            # Параметр sort имеет всего 2 возможных значения
             if parts[-1] not in ['asc', 'desc']:
-                raise ValidationError("Order must be 'asc' or 'desc'.")
+                raise ValidationError("Параметр sort принимает значение asc или desc")
+
 
 def sanitize_input(inputDict):
+    '''Очищает строку от вредоносного кода'''
     res = dict()
     for k, v in inputDict.items():
+        # Добавляем форматированую строку
         res[k] = bleach.clean(v)
     return res
 
+
 def validation(paramsAndValues):
+    '''Валидирует параметры и их значения'''
 
     params = paramsAndValues.keys()
-
     invalidParams = {key for key in params if key not in correctParams}
 
     if len(invalidParams) > 0:
         raise ValidationError(dict=invalidParams, message="Были найдены некорректные названия параметров")
-        #return jsonify(Invalid_data=invalidParams, Error="Были найдены некорректные названия параметров")
 
     # Очищаем значения от потенциально опасных скриптов
     clearedDict = sanitize_input(paramsAndValues)
@@ -246,12 +256,10 @@ def validation(paramsAndValues):
 
     if len(set(paramsAndValues)) != len(paramsAndValues):
         raise ValidationError(dict=invalidParams, message="Некоторые параметры повторяются, используйте & для перечисления значений")
-        #return jsonify(Invalid_data=invalidParams, Error="Некоторые параметры повторяются, используйте & для перечисления значений")
 
     # Если задан параметр search и ещё один из четких параметров
     elif len([key for key in params if key == 'search' or key in preciseSearchParams]) > 1:
         raise ValidationError(list=[key for key in params if key == 'search' or key in preciseSearchParams], message="Нельзя использовать поиск по одному параметру и по всем одновременно")
-        #return jsonify(Invalid_data=[key for key in paramsDict.keys() if key == 'search' or key in preciseSearchParams], Error="Нельзя использовать поиск по одному параметру и по всем одновременно")
     
     else:
         return True
@@ -277,7 +285,6 @@ def vri():
 
             # Вытаскиваем данные из списков-значений словаря !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             for key, value in paramsAndValues.items():
-                #values = value.split(' ')
                 newparamsDict[key] = [to_int_if_possible(value)]
 
             # Запрос к БД
@@ -327,7 +334,6 @@ def SelectFromDb(**kwargs):
 
     keysWithoutJoin = ['serialNumber', 'svidetelstvoNumber', 'poverkaDate', 'konecDate', 'isPrigodno']
     keysWithJoin = ['poveritelOrg', 'registerNumber', 'typeName']
-    #query = session.query(partitionTable)
 
     # Пробегаемся по полученным параметрам
     for key, valueArr in items.items():
@@ -364,7 +370,7 @@ def SelectFromDb(**kwargs):
             elif key == 'registerNumber':
                 ANDexpressions.append(UniqueRegisterNumbers.registerNumber == kwargs['registerNumber'][0])
 
-        elif key in ['rows', 'start', 'sort']: # ['mit_title', 'org_title', 'rows', 'start'] !!!!!!!!!!
+        elif key in ['rows', 'start', 'sort']:
             continue  # rows и start обработаны ранее, остальные будут обработаны в JOIN и FILTER
         else:
             raise AttributeError(f"Некорректный параметр: {key}")
@@ -383,15 +389,20 @@ def SelectFromDb(**kwargs):
     # Добавляем сортировку, если такой параметр был задан
     if 'sort' in kwargs:
         col = getattr(partitionTable, kwargs['sort'][0])
+        # Сортируем по убыванию
         if kwargs['sort'][1] == 'desc':
             query = query.order_by(desc(col))
+        # Сортируем по возрастанию
         else:
             query = query.order_by(col)
 
+    # Дополняем условия ограничения выборки
     query = query.limit(items['rows'][0]) \
         .offset(items['start'][0])
 
+    # Получаем результат запроса
     res = query.all()
+    # Преобразуем данные в удобочитаемый формат
     result = [queryToRow(query) for query in res]
     return result
 
@@ -409,9 +420,22 @@ def to_dict(instance):
     '''Преобразует строку таблицы в словарь'''
     if not instance:
         return {}
-    # Получаем типы по их названию
-    columns = [column.key for column in class_mapper(instance.__class__).columns]
+    # Получаем типы по их названию, при этом исключаем лишние колонки из выборки
+    columns = [column.key for column in class_mapper(instance.__class__).columns
+               if column.key != 'poveritelOrgId' and column.key != 'registerNumberId' and column.key != 'typeNameId']
     return {column: getattr(instance, column) for column in columns}
+
+def to_int_if_possible(s):
+    if s.isdigit():
+        return int(s)
+    return s
+
+def try_to_int(val):
+    try:
+        return int(val)
+    except ValueError:
+        logger.error('Не удалось конвертировать строку в целое число')
+        return -1
 
 
 if __name__ == "__main__":
